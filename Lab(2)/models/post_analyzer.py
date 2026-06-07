@@ -1,142 +1,136 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Sequence, Dict
+from itertools import combinations
+from typing import Dict, List, Sequence, Tuple
 
-@dataclass(frozen=True)
-class DerivativeResult:
-    vector: List[int]
-    variables: List[str]
 
-class PostAnalyzer:
-    def __init__(self, vector: Sequence[int], variables: Sequence[str]):
-        self.vec = list(vector)
-        self.vars = list(variables)
-        self.n = len(self.vars)
-        if len(self.vec) != (1 << self.n):
-            raise ValueError("Размер вектора должен быть 2^n")
+class FuncProperties:
 
-    def check_t0(self) -> bool:
-        return self.vec[0] == 0
+    def __init__(self, table: Sequence[int], labels: Sequence[str]):
+        self._data = tuple(table)
+        self._names = tuple(labels)
+        self._n = len(self._names)
+        if len(self._data) != 1 << self._n:
+            raise ValueError("Invalid table size")
 
-    def check_t1(self) -> bool:
-        return self.vec[-1] == 1
+    def is_const0(self) -> bool:
+        return self._data[0] == 0
 
-    def check_s(self) -> bool:
-        for i in range(len(self.vec)):
-            if self.vec[i] == self.vec[-1-i]:
+    def is_const1(self) -> bool:
+        return self._data[-1] == 1
+
+    def is_selfdual(self) -> bool:
+        sz = len(self._data)
+        for i in range(sz >> 1):
+            if self._data[i] == self._data[sz - 1 - i]:
                 return False
         return True
 
-    def check_m(self) -> bool:
-        # монотонность: если x <= y (побитово), то f(x) <= f(y)
-        size = len(self.vec)
-        for x in range(size):
-            for y in range(size):
-                if (x & y) == x and self.vec[x] > self.vec[y]:
+    def is_monotone(self) -> bool:
+        sz = len(self._data)
+        for low in range(sz):
+            for high in range(sz):
+                if (low & high) == low and self._data[low] > self._data[high]:
                     return False
         return True
 
-    def _mobius(self, arr: List[int]) -> List[int]:
-        res = arr[:]
-        sz = len(res)
+    def _transform(self, seq: Tuple[int, ...]) -> Tuple[int, ...]:
+        res = list(seq)
         step = 1
-        while step < sz:
-            for i in range(sz):
+        while step < len(res):
+            for i in range(len(res)):
                 if i & step:
                     res[i] ^= res[i ^ step]
             step <<= 1
-        return res
+        return tuple(res)
 
-    def zhegalkin_coefficients(self) -> List[int]:
-        return self._mobius(self.vec)
+    def anf(self) -> Tuple[int, ...]:
+        return self._transform(self._data)
 
-    def check_l(self) -> bool:
-        coeffs = self.zhegalkin_coefficients()
+    def is_affine(self) -> bool:
+        coeffs = self.anf()
         for i, c in enumerate(coeffs):
-            if c == 1 and bin(i).count('1') > 1:
+            if c and (i.bit_count() > 1):
                 return False
         return True
 
-    def zhegalkin_polynomial(self) -> str:
-        coeffs = self.zhegalkin_coefficients()
+    def anf_str(self) -> str:
+        coeffs = self.anf()
         terms = []
-        for i, c in enumerate(coeffs):
-            if c == 0:
+        for idx, c in enumerate(coeffs):
+            if not c:
                 continue
-            if i == 0:
+            if idx == 0:
                 terms.append("1")
                 continue
-            bits = f"{i:0{self.n}b}"
-            monom = ''.join(self.vars[j] for j, b in enumerate(bits) if b == '1')
-            terms.append(monom)
+            mask = f"{idx:0{self._n}b}"
+            mon = "".join(self._names[j] for j, b in enumerate(mask) if b == '1')
+            terms.append(mon)
         return " ⊕ ".join(terms) if terms else "0"
 
-    def essential_variables(self) -> Dict[str, bool]:
+    def essential(self) -> Dict[str, bool]:
         res = {}
-        for pos, var in enumerate(self.vars):
-            mask = 1 << (self.n - 1 - pos)
-            ess = False
-            for i in range(len(self.vec)):
-                if i & mask: continue
-                if self.vec[i] != self.vec[i | mask]:
-                    ess = True
-                    break
-            res[var] = ess
+        for pos, var in enumerate(self._names):
+            bit = 1 << (self._n - 1 - pos)
+            needed = any(self._data[i] != self._data[i | bit] for i in range(len(self._data)) if not (i & bit))
+            res[var] = needed
         return res
 
-    def _diff(self, vec: List[int], pos: int, bits: int) -> List[int]:
-        step = 1 << (bits - 1 - pos)
+    def _diff(self, vec: Tuple[int, ...], dim: int, pos: int) -> Tuple[int, ...]:
+        step = 1 << (dim - 1 - pos)
         out = []
-        for i in range(len(vec)):
-            if i & step: continue
-            out.append(vec[i] ^ vec[i | step])
-        return out
+        for i in range(0, len(vec), step << 1):
+            for j in range(step):
+                out.append(vec[i + j] ^ vec[i + j + step])
+        return tuple(out)
 
-    def partial_derivative(self, target_var: str, vector=None, variables=None) -> DerivativeResult:
-        vec = list(vector) if vector is not None else self.vec
-        vars_list = list(variables) if variables is not None else self.vars
-        if target_var not in vars_list:
-            return DerivativeResult(vec, vars_list)
-        idx = vars_list.index(target_var)
-        new_vec = self._diff(vec, idx, len(vars_list))
-        new_vars = [v for v in vars_list if v != target_var]
-        return DerivativeResult(new_vec, new_vars)
+    def derivative(self, var: str, cur_vec: Tuple[int, ...] = None, cur_dim: int = None) -> Tuple[Tuple[int, ...], Tuple[str, ...]]:
+        if cur_vec is None:
+            cur_vec = self._data
+            cur_names = self._names
+            cur_dim = self._n
+        else:
+            cur_names = [f"x{i}" for i in range(cur_dim)]  # fallback, but better pass names
+        if var not in cur_names:
+            return cur_vec, tuple(cur_names)
+        idx = cur_names.index(var)
+        new_vec = self._diff(cur_vec, cur_dim, idx)
+        new_names = tuple(v for v in cur_names if v != var)
+        return new_vec, new_names
 
-    def mixed_derivative(self, target_vars: Sequence[str]) -> DerivativeResult:
-        cur_vec = list(self.vec)
-        cur_vars = list(self.vars)
-        for tv in target_vars:
-            if tv not in cur_vars:
-                raise ValueError(f"Переменная {tv} отсутствует")
-            res = self.partial_derivative(tv, cur_vec, cur_vars)
-            cur_vec, cur_vars = res.vector, res.variables
-        return DerivativeResult(cur_vec, cur_vars)
+    def multi_derivative(self, vars: Sequence[str]) -> Tuple[Tuple[int, ...], Tuple[str, ...]]:
+        cur_vec = self._data
+        cur_names = self._names
+        cur_dim = self._n
+        for v in vars:
+            cur_vec, cur_names = self.derivative(v, cur_vec, cur_dim)
+            cur_dim = len(cur_names)
+        return cur_vec, cur_names
 
     @staticmethod
-    def vector_to_sdnf(vec: Sequence[int], vars_list: Sequence[str]) -> str:
+    def to_sop(vec: Sequence[int], labels: Sequence[str]) -> str:
         if not any(vec):
             return "0"
-        n = len(vars_list)
+        n = len(labels)
         terms = []
         for idx, val in enumerate(vec):
-            if val != 1:
+            if not val:
                 continue
             bits = f"{idx:0{n}b}"
-            literals = [v if b == '1' else f"¬{v}" for v, b in zip(vars_list, bits)]
+            literals = [labels[j] if bits[j] == '1' else f"¬{labels[j]}" for j in range(n)]
             terms.append("(" + " ∧ ".join(literals) + ")")
         return " ∨ ".join(terms)
 
     @staticmethod
-    def vector_to_sknf(vec: Sequence[int], vars_list: Sequence[str]) -> str:
-        if not vec or all(v == 1 for v in vec):
+    def to_pos(vec: Sequence[int], labels: Sequence[str]) -> str:
+        if not vec or all(vec):
             return "1"
-        n = len(vars_list)
+        n = len(labels)
         clauses = []
         for idx, val in enumerate(vec):
-            if val != 0:
+            if val:
                 continue
             bits = f"{idx:0{n}b}"
-            literals = [v if b == '0' else f"¬{v}" for v, b in zip(vars_list, bits)]
+            literals = [labels[j] if bits[j] == '0' else f"¬{labels[j]}" for j in range(n)]
             clauses.append("(" + " ∨ ".join(literals) + ")")
         return " ∧ ".join(clauses)
