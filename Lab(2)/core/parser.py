@@ -1,150 +1,78 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Set, Union
 
-from constants import VALID_VARIABLES
 
-class ExpressionError(ValueError):
+class LogicFormulaError(Exception):
     pass
 
-@dataclass
-class _Node:
-    pass
 
-@dataclass
-class _VarNode(_Node):
-    name: str
+class LogicEvaluator:
 
-@dataclass
-class _NotNode(_Node):
-    child: _Node
-
-@dataclass
-class _BinNode(_Node):
-    op: str
-    left: _Node
-    right: _Node
-
-class ExpressionParser:
-    """Рекурсивный парсер логических выражений."""
-
-    _SYMBOLS = {
-        '¬': '!', '∧': '&', '∨': '|', '→': '->', '↔': '~'
-    }
-
-    def __init__(self, raw_expression: str):
-        self.raw = self._normalize(raw_expression)
-        self.tokens = self._tokenize(self.raw)
-        self._pos = 0
-        self._ast = self._parse_implication()
-        if self._pos != len(self.tokens):
-            raise ExpressionError("Лишние символы после выражения")
-        self.postfix = self._ast_to_postfix(self._ast)
+    def __init__(self, formula: str):
+        self._original = formula
+        self._rpn = self._compile(self._preprocess(formula))
         self._vars = None
 
-    def _normalize(self, s: str) -> str:
-        s = s.replace(' ', '')
-        for old, new in self._SYMBOLS.items():
+    def _preprocess(self, s: str) -> str:
+        s = ''.join(s.split())
+        replacements = {
+            '¬': '!', '∧': '&', '∨': '|', '→': '>', '↔': '=',
+            '⇒': '>', '⇔': '=', '←': '>'
+        }
+        for old, new in replacements.items():
             s = s.replace(old, new)
+        s = s.replace('->', '>').replace('<-', '>').replace('<->', '=')
         return s
 
-    def _tokenize(self, s: str) -> List[str]:
-        tokens = []
-        i = 0
-        n = len(s)
-        while i < n:
-            ch = s[i]
-            if ch in VALID_VARIABLES or ch in '()':
-                tokens.append(ch)
-                i += 1
-            elif ch == '-' and i+1 < n and s[i+1] == '>':
-                tokens.append('->')
-                i += 2
-            elif ch in ('!', '&', '|', '~'):
-                tokens.append(ch)
-                i += 1
-            else:
-                raise ExpressionError(f"Неизвестный символ: {ch}")
-        return tokens
-
-    def _peek(self) -> Optional[str]:
-        return self.tokens[self._pos] if self._pos < len(self.tokens) else None
-
-    def _consume(self, expected: Optional[str] = None) -> str:
-        if self._pos >= len(self.tokens):
-            raise ExpressionError("Неожиданный конец выражения")
-        tok = self.tokens[self._pos]
-        if expected is not None and tok != expected:
-            raise ExpressionError(f"Ожидалось {expected}, получено {tok}")
-        self._pos += 1
-        return tok
-
-    def _parse_primary(self) -> _Node:
-        tok = self._peek()
-        if tok is None:
-            raise ExpressionError("Неожиданный конец")
-        if tok == '(':
-            self._consume('(')
-            node = self._parse_implication()
-            self._consume(')')
-            return node
-        if tok in VALID_VARIABLES:
-            self._consume()
-            return _VarNode(tok)
-        if tok == '!':
-            self._consume('!')
-            return _NotNode(self._parse_primary())
-        raise ExpressionError(f"Неожиданный токен: {tok}")
-
-    def _parse_implication(self) -> _Node:
-        left = self._parse_equivalence()
-        while self._peek() == '->':
-            self._consume('->')
-            right = self._parse_equivalence()
-            left = _BinNode('->', left, right)
-        return left
-
-    def _parse_equivalence(self) -> _Node:
-        left = self._parse_or()
-        while self._peek() == '~':
-            self._consume('~')
-            right = self._parse_or()
-            left = _BinNode('~', left, right)
-        return left
-
-    def _parse_or(self) -> _Node:
-        left = self._parse_and()
-        while self._peek() == '|':
-            self._consume('|')
-            right = self._parse_and()
-            left = _BinNode('|', left, right)
-        return left
-
-    def _parse_and(self) -> _Node:
-        left = self._parse_primary()
-        while self._peek() == '&':
-            self._consume('&')
-            right = self._parse_primary()
-            left = _BinNode('&', left, right)
-        return left
-
-    def _ast_to_postfix(self, node: _Node) -> List[str]:
-        if isinstance(node, _VarNode):
-            return [node.name]
-        if isinstance(node, _NotNode):
-            return self._ast_to_postfix(node.child) + ['!']
-        if isinstance(node, _BinNode):
-            left = self._ast_to_postfix(node.left)
-            right = self._ast_to_postfix(node.right)
-            return left + right + [node.op]
-        raise ExpressionError("Неизвестный узел AST")
-
-    def evaluate(self, values: Dict[str, int]) -> int:
+    def _compile(self, expr: str) -> List[str]:
+        precedence = {'!': 4, '&': 3, '|': 2, '>': 1, '=': 0}
+        output = []
         stack = []
-        for token in self.postfix:
-            if token in VALID_VARIABLES:
-                stack.append(bool(values[token]))
+        i = 0
+        n = len(expr)
+        while i < n:
+            ch = expr[i]
+            if ch.isalpha():
+                output.append(ch)
+                i += 1
+            elif ch == '(':
+                stack.append(ch)
+                i += 1
+            elif ch == ')':
+                while stack and stack[-1] != '(':
+                    output.append(stack.pop())
+                if not stack or stack[-1] != '(':
+                    raise LogicFormulaError("Несогласованные скобки")
+                stack.pop()
+                i += 1
+            elif ch in '!&|>=':
+                if ch == '!':
+                    stack.append(ch)
+                    i += 1
+                else:
+                    while (stack and stack[-1] != '(' and
+                           precedence.get(stack[-1], -1) >= precedence.get(ch, -1)):
+                        output.append(stack.pop())
+                    stack.append(ch)
+                    i += 1
+            else:
+                raise LogicFormulaError(f"Недопустимый символ '{ch}'")
+        while stack:
+            top = stack.pop()
+            if top == '(':
+                raise LogicFormulaError("Несогласованные скобки")
+            output.append(top)
+        return output
+
+    def evaluate(self, assignment: Dict[str, int]) -> int:
+        stack = []
+        for token in self._rpn:
+            if token.isalpha():
+                val = assignment.get(token)
+                if val is None:
+                    raise LogicFormulaError(f"Переменная {token} не задана")
+                stack.append(bool(val))
             elif token == '!':
                 a = stack.pop()
                 stack.append(not a)
@@ -156,23 +84,28 @@ class ExpressionParser:
                 b = stack.pop()
                 a = stack.pop()
                 stack.append(a or b)
-            elif token == '->':
+            elif token == '>':
                 b = stack.pop()
                 a = stack.pop()
                 stack.append((not a) or b)
-            elif token == '~':
+            elif token == '=':
                 b = stack.pop()
                 a = stack.pop()
                 stack.append(a == b)
             else:
-                raise ExpressionError(f"Неизвестный оператор: {token}")
+                raise LogicFormulaError(f"Неизвестный оператор {token}")
+        if len(stack) != 1:
+            raise LogicFormulaError("Ошибка вычисления")
         return int(stack[0])
 
     def variables(self) -> List[str]:
         if self._vars is None:
-            seen = set()
-            for tok in self.tokens:
-                if tok in VALID_VARIABLES:
+            seen: Set[str] = set()
+            for tok in self._rpn:
+                if tok.isalpha():
                     seen.add(tok)
-            self._vars = sorted(seen, key=VALID_VARIABLES.index)
+            self._vars = sorted(seen)
         return self._vars
+
+    def postfix(self) -> List[str]:
+        return self._rpn.copy()
