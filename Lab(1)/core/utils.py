@@ -1,34 +1,30 @@
 from constants import TOTAL_BITS
 
 
-class BitUtils:
+class BitOps:
+
     @staticmethod
-    def add_unsigned(a, b):
-        """Простое сложение двух массивов бит столбиком"""
-        result = ["0"] * TOTAL_BITS
+    def add_bits(x, y):
+        out = ['0'] * TOTAL_BITS
         carry = 0
-        for i in range(TOTAL_BITS - 1, -1, -1):
-            bit_a = 1 if a[i] == "1" else 0
-            bit_b = 1 if b[i] == "1" else 0
-            total = bit_a + bit_b + carry
-
-            result[i] = "1" if total % 2 != 0 else "0"
-            carry = 1 if total >= 2 else 0
-
-        return result, "1" if carry else "0"
+        for idx in range(TOTAL_BITS - 1, -1, -1):
+            sx = 1 if x[idx] == '1' else 0
+            sy = 1 if y[idx] == '1' else 0
+            s = sx + sy + carry
+            out[idx] = '1' if (s & 1) else '0'
+            carry = 1 if s >= 2 else 0
+        return out, '1' if carry else '0'
 
     @staticmethod
-    def invert_bits(bits, start_index=0):
-        """Замена 0 на 1 и наоборот"""
-        res = bits[:]
-        for i in range(start_index, len(res)):
-            res[i] = "1" if res[i] == "0" else "0"
-        return res
+    def flip_bits(data, start=0):
+        flipped = data[:]
+        for i in range(start, len(flipped)):
+            flipped[i] = '0' if flipped[i] == '1' else '1'
+        return flipped
 
     @staticmethod
-    def add_one(bits):
-        """Прибавление единицы (нужно для доп. кода)"""
-        one = ["0"] * TOTAL_BITS
-        one[-1] = "1"
-        res, _ = BitUtils.add_unsigned(bits, one)
-        return res
+    def increment(code):
+        one = ['0'] * TOTAL_BITS
+        one[-1] = '1'
+        inc, _ = BitOps.add_bits(code, one)
+        return inc
