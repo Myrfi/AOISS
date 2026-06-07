@@ -33,13 +33,17 @@ class Minimizer:
 
     @staticmethod
     def _mask_pair(m1: int, dc1: int, m2: int, dc2: int) -> Tuple[int, int] | None:
-        diff = (m1 ^ m2) & ~(dc1 | dc2)
+        if dc1 != dc2:
+            return None
+
+        diff = (m1 ^ m2) & ~dc1
         if diff == 0:
             return None
         if (diff & (diff - 1)) != 0:
             return None
+
         new_mask = m1 & m2
-        new_dc = dc1 | dc2 | diff
+        new_dc = dc1 | diff
         return (new_mask, new_dc)
 
     def _initial_implicants(self, mode: str) -> List[Tuple[int, int, int]]:
